@@ -1,0 +1,16 @@
+# Use cache in the client
+
+class ClientRequest(aiohttp.ClientRequest):
+    def __init__(self, *args, cache, **kwargs):
+        self.cache = cache
+        super().__init__(*args, **kwargs)
+
+    async def send(self, connection):
+        self.headers.update(context.current_headers())
+
+        if entry := self.cache.get(self.method, self.url):
+            self.headers['if-none-match'] = entry.etag
+
+        return await super().send(connection)
+
+# vim: ft=python

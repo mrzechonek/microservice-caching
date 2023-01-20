@@ -1,0 +1,25 @@
+# Use cached version in the client
+
+class ClientResponse(aiohttp.ClientResponse):
+    def __init__(self, *args, cache: "MemoryCache", **kwargs):
+        super().__init__(*args, **kwargs)
+        self.cache = cache
+
+    async def start(self, connection):
+        await super().start(connection)
+
+        if self.status == 304:
+            if entry := self.cache.get(self.method, self.url):
+                logger.info("FETCH %s", entry.etag)
+                self.status = entry.response.status
+                self.reason = entry.response.reason
+                self._body = entry.response._body
+
+        elif etag := self.headers.get('etag'):
+            logger.info("STORE %s", etag)
+            self.cache.store(self.method, self.url, self.request_info.headers, self.headers, etag, self)
+
+
+        return self
+
+# vim: ft=python

@@ -1,0 +1,53 @@
+version: "2.4"
+
+x-healthcheck-options: &healthcheck-options
+  interval: 1s
+  timeout: 10s
+  retries: 10
+
+services:
+  postgres:
+    image: postgres:11.5
+    restart: on-failure
+    mem_limit: 512m
+    healthcheck:
+      <<: *healthcheck-options
+      test: for i in todo; do pg_isready -U postgres -d $$i; done
+    volumes:
+      - ./postgres-initdb.d:/docker-entrypoint-initdb.d
+      - postgres:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB_LIST: "todo"
+      POSTGRES_USER: &postgres-user postgres
+      POSTGRES_PASSWORD: &postgres-password postgres
+
+  todo-svc:
+    build:
+      context: ./todo-svc
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./todo-svc:/todo-svc
+      - ./common:/common
+    environment:
+      DB_HOST: postgres
+      DB_USER: *postgres-user
+      DB_PASSWORD: *postgres-password
+      DB_NAME: todo
+
+  api-svc:
+    build:
+      context: ./api-svc
+    volumes:
+      - ./api-svc:/api-svc
+      - ./common:/common
+    environment:
+      TODO_SVC: todo-svc
+    ports:
+      - 8080:80
+
+volumes:
+  postgres:
+
+# vim: ts=2 sw=2

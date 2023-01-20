@@ -1,0 +1,50 @@
+# Vary: client side
+
+class MemoryCache:
+    def __init__(self):
+        self.cache = {}
+        self.vary = {}
+
+    def _key(self, method, url, request_headers, vary_headers):
+        return (method, str(url), *((name, request_headers.get(name)) for name in vary_headers))
+
+    def get(self, method, url, request_headers):
+        vary_headers = self.vary.get(str(url), [])
+        key = self._key(method, url, request_headers, vary_headers)
+        return self.cache.get(key)
+
+    def store(self, method, url, request_headers, etag, response):
+        vary_headers = [name for name in response.headers.get('vary', '').split(';') if name]
+        self.vary[str(url)] = vary_headers
+
+        key = self._key(method, url, request_headers, vary_headers)
+        self.cache[key] = CacheEntry(etag, response)
+
+
+class ClientRequest(aiohttp.ClientRequest):
+    async def send(self, conn):
+        self.headers.update(context.current_headers())
+
+        if entry := self.cache.get(self.method, self.url, self.headers):
+            self.headers['if-none-match'] = entry.etag
+
+        return await super().send(conn)
+
+class ClientResponse(aiohttp.ClientResponse):
+    async def start(self, conn):
+        await super().start(conn)
+
+        if self.status == 304:
+            if entry := self.cache.get(self.method, self.url, self.request_info.headers):
+                logger.info("FETCH %s %s", self.url, entry.etag)
+                self.status = entry.response.status
+                self.reason = entry.response.reason
+                self._body = entry.response._body
+
+        elif etag := self.headers.get('etag'):
+            logger.info("STORE %s %s", self.url, etag)
+            self.cache.store(self.method, self.url, self.request_info.headers, etag, self)
+
+        return self
+
+# vim: ft=python
