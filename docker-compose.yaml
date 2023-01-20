@@ -1,0 +1,98 @@
+version: "2.4"
+
+x-healthcheck-options: &healthcheck-options
+  interval: 1s
+  timeout: 10s
+  retries: 10
+
+services:
+  postgres:
+    image: postgres:11.5
+    restart: on-failure
+    mem_limit: 512m
+    healthcheck:
+      <<: *healthcheck-options
+      test: for i in project node; do pg_isready -U postgres -d $$i; done
+    volumes:
+      - ./postgres-initdb.d:/docker-entrypoint-initdb.d
+      - postgres:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB_LIST: "project node"
+      POSTGRES_USER: &postgres-user postgres
+      POSTGRES_PASSWORD: &postgres-password postgres
+
+  project-svc:
+    build:
+      context: ./project-svc
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      <<: *healthcheck-options
+      test: curl -q 0.0.0.0:80/health
+    volumes:
+      - ./project-svc:/project-svc
+      - ./common:/common
+    environment:
+      DB_HOST: postgres
+      DB_USER: *postgres-user
+      DB_PASSWORD: *postgres-password
+      DB_NAME: project
+
+  node-svc:
+    build:
+      context: ./node-svc
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      <<: *healthcheck-options
+      test: curl -q 0.0.0.0:80/health
+    volumes:
+      - ./node-svc:/node-svc
+      - ./common:/common
+    environment:
+      DB_HOST: postgres
+      DB_USER: *postgres-user
+      DB_PASSWORD: *postgres-password
+      DB_NAME: node
+
+  config-svc:
+    build:
+      context: ./config-svc
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      <<: *healthcheck-options
+      test: curl -q 0.0.0.0:80/health
+    volumes:
+      - ./config-svc:/config-svc
+      - ./common:/common
+
+  bff-svc:
+    build:
+      context: ./bff-svc
+    depends_on:
+      project-svc:
+        condition: service_healthy
+      node-svc:
+        condition: service_healthy
+      config-svc:
+        condition: service_healthy
+    healthcheck:
+      <<: *healthcheck-options
+      test: curl -q 0.0.0.0:80/health
+    volumes:
+      - ./bff-svc:/bff-svc
+      - ./common:/common
+    environment:
+      PROJECT_SVC: project-svc
+      SCENARIO_SVC: node-svc
+    ports:
+      - 8080:80
+
+volumes:
+  postgres:
+
+# vim: ts=2 sw=2
