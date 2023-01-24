@@ -1,3 +1,4 @@
+import logging
 import logging.config
 from secrets import token_hex
 from typing import List
@@ -10,7 +11,6 @@ from pkg_resources import resource_filename
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from project.cache import CachingMiddleware, MemoryCache
 from project.context import RequestHeadersMiddleware, current_headers
 from project.database import DB_URL, Area, Collaborator, Project
 from project.log_config import LOG_CONFIG
@@ -52,7 +52,7 @@ def project_role():
 
 def project_svc() -> FastAPI:
     logging.config.dictConfig(LOG_CONFIG)
-    cache = MemoryCache()
+    logger = logging.getLogger("svc")
 
     app = FastAPI()
     app.router.route_class = LoggingRoute
@@ -61,7 +61,6 @@ def project_svc() -> FastAPI:
         db_url=str(DB_URL),
         commit_on_exit=True,
     )
-    app.add_middleware(CachingMiddleware, cache=cache)
     app.add_middleware(RequestHeadersMiddleware)
 
     @app.on_event("startup")
@@ -77,15 +76,9 @@ def project_svc() -> FastAPI:
             await connection.run_sync(upgrade, config)
 
     @app.get("/projects")
-    async def get_projects(response: responses.Response, cache_vary=Depends(cache.vary)):
+    async def get_projects(response: responses.Response):
         user = current_headers().get("x-user")
         projects = await Project.select(Project.collaborators.any(Collaborator.email == user))
-
-        with cache_vary("x-user") as invalidate:
-            for project in projects:
-                invalidate(Project, project_id=project.project_id)
-
-            invalidate(Collaborator, email=user)
 
         return projects
 
@@ -104,13 +97,8 @@ def project_svc() -> FastAPI:
         "/projects/{project_id}",
         dependencies=[project_role()],
     )
-    async def get_project(project_id: str, cache_vary=Depends(cache.vary)):
+    async def get_project(project_id: str):
         project = await Project.get(Project.project_id == project_id)
-
-        with cache_vary("x-role") as invalidate:
-            invalidate(Project, project_id=project_id)
-            invalidate(Area, project_id=project_id)
-            invalidate(Collaborator, project_id=project_id)
 
         return project
 
@@ -129,12 +117,8 @@ def project_svc() -> FastAPI:
         response_model=List[CreateCollaborator],
         dependencies=[project_role()],
     )
-    async def get_collaborators(project_id: str, cache_vary=Depends(cache.vary)):
+    async def get_collaborators(project_id: str):
         collaborators = await Collaborator.select(Collaborator.project_id == project_id)
-
-        with cache_vary("x-role") as invalidate:
-            invalidate(Project, project_id=project_id, _action="delete")
-            invalidate(Collaborator, project_id=project_id)
 
         return collaborators
 
@@ -154,14 +138,10 @@ def project_svc() -> FastAPI:
         return f"/projects/{project_id}/collaborators"
 
     @app.get("/projects/{project_id}/collaborators/{email}")
-    async def get_collaborator(project_id: str, email: str, cache_vary=Depends(cache.vary)):
+    async def get_collaborator(project_id: str, email: str):
         collaborator = await Collaborator.get(
             Collaborator.project_id == project_id, Collaborator.email == email
         )
-
-        with cache_vary("x-user") as invalidate:
-            invalidate(Project, project_id=project_id, _action="delete")
-            invalidate(Collaborator, project_id=project_id, email=email)
 
         return collaborator
 
@@ -189,13 +169,9 @@ def project_svc() -> FastAPI:
         "/projects/{project_id}/areas",
         dependencies=[project_role()],
     )
-    async def get_areas(project_id: str, cache_vary=Depends(cache.vary)):
+    async def get_areas(project_id: str):
         await Project.get(Project.project_id == project_id)
         areas = await Area.select(Area.project_id == project_id)
-
-        with cache_vary("x-role") as invalidate:
-            invalidate(Project, project_id=project_id, _action="delete")
-            invalidate(Area, project_id=project_id)
 
         return areas
 
@@ -217,11 +193,8 @@ def project_svc() -> FastAPI:
         "/projects/{project_id}/areas/{area_id}",
         dependencies=[project_role()],
     )
-    async def get_area(project_id: str, area_id: str, cache_vary=Depends(cache.vary)):
+    async def get_area(project_id: str, area_id: str):
         area = await Area.get(Area.project_id == project_id, Area.area_id == area_id)
-
-        with cache_vary("x-role") as invalidate:
-            invalidate(Area, project_id=project_id, area_id=area_id)
 
         return area
 

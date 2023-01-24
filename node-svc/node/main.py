@@ -9,7 +9,6 @@ from pkg_resources import resource_filename
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from node.cache import CachingMiddleware, MemoryCache
 from node.context import RequestHeadersMiddleware
 from node.database import DB_URL, Node
 from node.log_config import LOG_CONFIG
@@ -28,7 +27,7 @@ class UpdateNode(BaseModel):
 
 def node_svc() -> FastAPI:
     logging.config.dictConfig(LOG_CONFIG)
-    cache = MemoryCache()
+    logger = logging.getLogger("svc")
 
     app = FastAPI()
     app.router.route_class = LoggingRoute
@@ -37,7 +36,6 @@ def node_svc() -> FastAPI:
         db_url=str(DB_URL),
         commit_on_exit=True,
     )
-    app.add_middleware(CachingMiddleware, cache=cache)
     app.add_middleware(RequestHeadersMiddleware)
 
     @app.on_event("startup")
@@ -53,13 +51,8 @@ def node_svc() -> FastAPI:
             await connection.run_sync(upgrade, config)
 
     @app.get("/nodes")
-    async def list_nodes(
-        project_id: str = Query(...), area_id: str = Query(...), cache_vary=Depends(cache.vary)
-    ):
+    async def list_nodes(project_id: str = Query(...), area_id: str = Query(...)):
         nodes = await Node.select(Node.tags.comparator.contains(dict(project_id=project_id, area_id=area_id)))
-
-        with cache_vary() as invalidate:
-            invalidate(Node, tags=dict(project_id=project_id, area_id=area_id))
 
         return nodes
 
@@ -68,15 +61,11 @@ def node_svc() -> FastAPI:
         node_id: str,
         project_id: str = Query(...),
         area_id: str = Query(...),
-        cache_vary=Depends(cache.vary),
     ):
         node = await Node.get(
             Node.node_id == node_id,
             Node.tags.comparator.contains(dict(project_id=project_id, area_id=area_id)),
         )
-
-        with cache_vary() as invalidate:
-            invalidate(Node, node_id=node_id)
 
         return node
 

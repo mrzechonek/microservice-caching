@@ -1,3 +1,4 @@
+import logging
 import logging.config
 from base64 import b64encode
 from hashlib import sha1
@@ -77,14 +78,14 @@ class Misconfiguration(BaseModel):
 
 def bff_svc() -> FastAPI:
     logging.config.dictConfig(log_config.LOG_CONFIG)
-    cache = client.MemoryCache()
+    logger = logging.getLogger("svc")
 
     app = FastAPI()
     app.router.route_class = route.LoggingRoute
     app.router.route_class.DELIMITER = True
 
     app.add_middleware(role.RoleMiddleware)
-    app.add_middleware(client.SessionMiddleware, cache=cache)
+    app.add_middleware(client.SessionMiddleware)
     app.add_middleware(context.CorrelationIdMiddleware)
     app.add_middleware(context.RequestHeadersMiddleware)
 
