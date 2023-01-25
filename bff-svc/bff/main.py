@@ -85,7 +85,7 @@ def bff_svc() -> FastAPI:
     app.router.route_class.DELIMITER = True
 
     app.add_middleware(role.RoleMiddleware)
-    app.add_middleware(client.SessionMiddleware)
+    app.add_middleware(client.SessionMiddleware, cache=client.MemoryCache())
     app.add_middleware(context.CorrelationIdMiddleware)
     app.add_middleware(context.RequestHeadersMiddleware)
 

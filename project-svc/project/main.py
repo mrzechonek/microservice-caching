@@ -11,6 +11,7 @@ from pkg_resources import resource_filename
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import create_async_engine
 
+from project.cache import CacheMidleware, MemoryCache
 from project.context import RequestHeadersMiddleware, current_headers
 from project.database import DB_URL, Area, Collaborator, Project
 from project.log_config import LOG_CONFIG
@@ -63,6 +64,9 @@ def project_svc() -> FastAPI:
     )
     app.add_middleware(RequestHeadersMiddleware)
 
+    cache = MemoryCache()
+    app.add_middleware(CacheMidleware, cache=cache)
+
     @app.on_event("startup")
     async def run_migrations():
         def upgrade(connection, cfg):
@@ -79,6 +83,8 @@ def project_svc() -> FastAPI:
     async def get_projects(response: responses.Response):
         user = current_headers().get("x-user")
         projects = await Project.select(Project.collaborators.any(Collaborator.email == user))
+
+        response.headers["vary"] = "x-user"
 
         return projects
 
