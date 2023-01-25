@@ -16,28 +16,80 @@ from bff import context
 logger = getLogger("client")
 _session: ContextVar[aiohttp.ClientSession] = ContextVar("_session")
 
+@dataclass
+class CacheEntry:
+    etag: str
+    response: aiohttp.ClientResponse
+
+class MemoryCache:
+    def __init__(self):
+        self.cache = {}
+        self.vary = {}
+
+    def _key(self, method, url, request_headers, vary_headers):
+        return (method, str(url), *((i, request_headers.get(i)) for i in vary_headers))
+
+    def get(self, method, url, request_headers):
+        vary_headers = self.vary.get(str(url), [])
+        key = self._key(method, url, request_headers, vary_headers)
+        return self.cache.get(key)
+
+    def store(self, method, url, request_headers, etag, response):
+        vary_headers = [i for i in response.headers.get('vary', '').split(';') if i]
+        self.vary[str(url)] = vary_headers
+
+        key = self._key(method, url, request_headers, vary_headers)
+        self.cache[key] = CacheEntry(etag, response)
+
 
 class ClientRequest(aiohttp.ClientRequest):
+    def __init__(self, *args, cache, **kwargs):
+        self.cache = cache
+        super().__init__(*args, **kwargs)
+
     async def send(self, conn):
         self.headers.update(context.current_headers())
+
+        if entry := self.cache.get(self.method, self.url, self.headers):
+            self.headers['if-none-match'] = entry.etag
+
         return await super().send(conn)
+
+class ClientResponse(aiohttp.ClientResponse):
+    def __init__(self, *args, cache, **kwargs):
+        self.cache = cache
+        super().__init__(*args, **kwargs)
+
+    async def start(self, conn):
+        await super().start(conn)
+
+        if self.status == 304:
+            if entry := self.cache.get(self.method, self.url, self.request_info.headers):
+                self.status = entry.response.status
+                self.reason = entry.response.reason
+                self._body = entry.response._body
+
+        elif etag := self.headers.get('etag'):
+            self.cache.store(self.method, self.url, self.request_info.headers, etag, self)
 
 
 class ClientSession(aiohttp.ClientSession):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, cache, **kwargs):
         super().__init__(
             *args,
-            request_class=ClientRequest,
+            request_class=partial(ClientRequest, cache=cache),
+            response_class=partial(ClientResponse, cache=cache),
             **kwargs,
         )
 
 
 class SessionMiddleware(BaseHTTPMiddleware):
-    def __init__(self, app):
+    def __init__(self, app, cache):
+        self.cache = cache
         super().__init__(app)
 
     async def dispatch(self, request, call_next):
-        s = ClientSession(raise_for_status=True)
+        s = ClientSession(raise_for_status=True, cache=self.cache)
 
         try:
             _session.set(s)

@@ -21,7 +21,8 @@ class MemoryCache:
     def vary_on(self, request: Request, response: Response):
         def _vary_on(*vary_headers):
             response.headers['vary'] = ';'.join(vary_headers)
-            return self._key(request.method, request.url, request.headers, vary_headers)
+            key = self._key(request.method, request.url, request.headers, vary_headers)
+            return lambda *args: self.cache.pop(key, None)
 
         return _vary_on
 
