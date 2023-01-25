@@ -15,6 +15,7 @@ from project.context import RequestHeadersMiddleware, current_headers
 from project.database import DB_URL, Area, Collaborator, Project
 from project.log_config import LOG_CONFIG
 from project.route import LoggingRoute
+from project.cache import MemoryCache, CacheMiddleware
 
 
 class CreateProject(BaseModel):
@@ -63,6 +64,9 @@ def project_svc() -> FastAPI:
     )
     app.add_middleware(RequestHeadersMiddleware)
 
+    cache = MemoryCache()
+    app.add_middleware(CacheMiddleware, cache=cache)
+
     @app.on_event("startup")
     async def run_migrations():
         def upgrade(connection, cfg):
@@ -76,9 +80,16 @@ def project_svc() -> FastAPI:
             await connection.run_sync(upgrade, config)
 
     @app.get("/projects")
-    async def get_projects(response: responses.Response):
+    async def get_projects(response: responses.Response, cache_vary = Depends(cache.vary_on)):
         user = current_headers().get("x-user")
         projects = await Project.select(Project.collaborators.any(Collaborator.email == user))
+
+        cache_drop = cache_vary('x-user')
+
+        for project in projects:
+            Project.subscribe(cache_drop, project_id=project.project_id)
+
+        Collaborator.subscribe(cache_drop, email=user)
 
         return projects
 
