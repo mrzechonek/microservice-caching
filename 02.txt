@@ -1,0 +1,42 @@
+# Store the ETag in bff client
+
+@dataclass
+class CacheEntry:
+    etag: str
+    response: aiohttp.ClientResponse
+
+
+class MemoryCache:
+    def __init__(self):
+        self.cache = {}
+
+    def _key(self, method, url):
+        return (method, str(url))
+
+    def store(self, method, url, response_headers, etag, response):
+        key = self._key(method, url)
+        self.cache[key] = CacheEntry(etag=etag, response=response)
+
+    def get(self, method, url):
+        key = self._key(method, url)
+        return self.cache.get(key)
+
+
+
+class ClientResponse(aiohttp.ClientResponse):
+    def __init__(self, *args, cache, **kwargs):
+        self.cache = cache
+        super().__init__(*args, **kwargs)
+
+
+    async def start(self, connection):
+        await super().start(connection)
+
+        if etag := self.headers.get('etag'):
+            logger.info("STORE %s", etag)
+            self.cache.store(self.method, self.url, etag, self)
+
+        return self
+
+
+# vim: ft=python

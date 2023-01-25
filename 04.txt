@@ -1,0 +1,26 @@
+# Check cache on the server
+
+class CacheMiddleware:
+    def __init__(self, app, cache):
+        self.app = app
+        self.cache
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        method = scope["method"]
+        url = URL(scope=scope)
+        request_headers = Headers(scope=scope)
+
+        if if_none_match := request_headers.get('if-none-match'):
+            if entry := self.cache.get(method, url):
+                if if_none_match == entry.etag:
+                    await send(dict(type="http.response.start", status=304, headers=entry.response_headers.raw))
+                    await send(dict(type="http.response.body", more_body=False))
+                    return
+
+        await self.app(scope, receive, CacheSend(self.cache, method, url, send))
+
+# vim: ft=python

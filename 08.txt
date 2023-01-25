@@ -1,0 +1,80 @@
+# Invalidate on model change
+
+def match(received, expected):
+    def _match(lhs, rhs):
+        if rhs is ...:
+            return True
+
+        if isinstance(rhs, list):
+            return len(rhs) == len(lhs) and all(match(*i) for i in zip(lhs, rhs))
+
+        if isinstance(rhs, dict):
+            _lhs = {k: v for k, v in lhs.items()}
+            return all(match(v, rhs.get(k, ...)) for k, v in _lhs.items())
+
+        return lhs == rhs
+
+    return _match(received, expected)
+
+
+class MemoryCache:
+    def vary_on(self, request: Request, response: Response):
+        def _vary_on(*vary_headers):
+            response.headers['vary'] = ';'.join(vary_headers)
+            return self._key(request.method, request.url, request.headers, vary_headers)
+
+        return _vary_on
+
+    def drop(self, key):
+        self.cache.pop(key, None)
+
+class Signal:
+    def __init__(self):
+        self.callbacks = set()
+
+    def subscribe(self, callback, filter):
+        def _callback(obj):
+            if not match(obj, filter):
+                return
+
+            callback(obj)
+
+        self.callbacks.add(_callback)
+
+    def publish(self, obj):
+        for callback in self.callbacks:
+            callback(obj)
+
+CHANGE = defaultdict(Signal)
+
+class CrudMixin:
+    @classmethod
+    def subscribe(cls, callback, **filter):
+        CHANGE[cls].subscribe(callback, filter)
+
+    @classmethod
+    def notify(cls, objs):
+        for obj in objs:
+            CHANGE[cls].publish(obj._mapping)
+
+    @classmethod
+    async def create(cls, **kwargs):
+        stmt = insert(cls).values(kwargs).returning('*')
+        objs = await db.session.execute(stmt)
+        cls.notify(objs.fetchall())
+
+
+@app.get("/projects")
+async def get_projects(response: responses.Response, vary_on = Depends(cache.vary_on)):
+    user = current_headers().get("x-user")
+    projects = await Project.select(Project.collaborators.any(Collaborator.email == user))
+
+    key = vary_on("x-user")
+    for project in projects:
+        change.subscribe(Project, lambda obj: cache.drop(key), project_id=project.project_id)
+
+    change.subscribe(Collaborator, lambda obj: cache.drop(key), email=user)
+
+    return projects
+
+# vim: ft=python

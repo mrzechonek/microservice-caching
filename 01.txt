@@ -1,0 +1,78 @@
+# Generating ETags in projects-svc
+
+@dataclass
+class CacheEntry:
+    etag: str
+    response_headers: Headers
+
+
+class MemoryCache:
+    def __init__(self):
+        self.cache = {}
+
+    def _key(self, method, url):
+        return (method, str(url))
+
+    def store(self, method, url, response_headers, etag):
+        key = self._key(method, url)
+        self.cache[key] = CacheEntry(etag=etag, response_headers=response_headers)
+
+    def get(self, method, url):
+        key = self._key(method, url)
+        return self.cache.get(key)
+
+
+class CacheSend:
+    def __init__(self, cache, method, url, send):
+        self.cache = cache
+        self.method = method
+        self.url = url
+        self.send = send
+
+        self.response_start = None
+        self.response_body = []
+
+    @property
+    def response_headers(self):
+        return Headers(raw=self.response_start["headers"])
+
+    async def __call__(self, message):
+        if message["type"] == "http.response.start":
+            self.response_start = message
+            return
+
+        assert message["type"] == "http.response.body"
+
+        self.response_body.append(message)
+
+        if message.get("more_body"):
+            return
+
+        body = b''.join(body["body"] for body in self.response_body)
+        etag = base64.b64encode(hashlib.sha1(body).digest())
+
+        self.cache.store(self.method, self.url, self.response_headers, etag.decode())
+
+        self.response_start["headers"].append((b'etag', etag))
+
+        await self.send(self.response_start)
+        for body in self.response_body:
+            await self.send(body)
+
+class CacheMiddleware:
+    def __init__(self, app, cache):
+        self.app = app
+        self.cache
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        method = scope["method"]
+        url = URL(scope=scope)
+
+        await self.app(scope, receive, CacheSend(self.cache, method, url, send))
+
+
+# vim: ft=python
