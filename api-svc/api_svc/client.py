@@ -15,33 +15,94 @@ from api_svc import context
 logger = getLogger("client")
 _session: ContextVar[ClientSession] = ContextVar("_session")
 
+@dataclass
+class CacheEntry:
+    etag: str
+    response: ClientResponse
+
+
+@dataclass
+class MemoryCache:
+    cache: dict[tuple, CacheEntry] = field(default_factory=dict)
+    vary_headers: dict = field(default_factory=dict)
+
+    def _key(self, request: RequestInfo, vary_headers: list[str]):
+        return (
+            request.method,
+            str(request.url),
+            *((name, request.headers.get(name)) for name in vary_headers)
+        )
+
+    def store(self, request: RequestInfo, response: ClientResponse, etag: str):
+        vary_headers = [name for name in response.headers.get('Vary', '').split(';') if name]
+        self.vary_headers[str(request.url)] = vary_headers
+
+        key = self._key(request, vary_headers)
+        self.cache[key] = CacheEntry(etag, response)
+
+    def get(self, request: RequestInfo) -> CacheEntry | None:
+        vary_headers = self.vary_headers.get(str(request.url), [])
+
+        key = self._key(request, vary_headers)
+        return self.cache.get(key)
+
 
 class CacheResponse(ClientResponse):
-    pass
+    def __init__(self, *args, cache, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.cache = cache
+
+    async def start(self, conn):
+        await super().start(conn)
+
+        if (
+            self.status == 304
+            and (entry := self.cache.get(self.request_info))
+        ):
+            self.status = entry.response.status
+            self.reason = entry.response.reason
+            self._body = entry.response._body
+
+        elif (
+            self.method == 'GET'
+            and self.status == 200
+            and (etag := self.headers.get("ETag"))
+        ):
+            self.cache.store(self.request_info, self, etag)
+            logger.info("ETAG %s", etag)
 
 
 class CacheRequest(ClientRequest):
+    def __init__(self, *args, cache, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.cache = cache
+
     async def send(self, conn):
         self.headers.update(context.current_headers())
+
+        if entry := self.cache.get(self.request_info):
+            self.headers["If-None-Match"] = entry.etag
+
         return await super().send(conn)
 
 
 class CacheSession(ClientSession):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, cache, **kwargs):
         super().__init__(
             *args,
-            request_class=CacheRequest,
-            response_class=CacheResponse,
+            request_class=partial(CacheRequest, cache=cache),
+            response_class=partial(CacheResponse, cache=cache),
             **kwargs,
         )
 
 
 class SessionMiddleware(BaseHTTPMiddleware):
-    def __init__(self, app):
+    def __init__(self, app, cache):
         super().__init__(app)
+        self.cache = cache
 
     async def dispatch(self, request, call_next):
-        s = CacheSession(raise_for_status=True)
+        s = CacheSession(raise_for_status=True, cache=self.cache)
 
         try:
             _session.set(s)

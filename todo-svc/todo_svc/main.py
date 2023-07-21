@@ -15,6 +15,7 @@ from todo_svc.context import RequestHeadersMiddleware, current_headers
 from todo_svc.database import DB_URL, Collaborator, TodoEntry, TodoList
 from todo_svc.log_config import LOG_CONFIG
 from todo_svc.route import LoggingRoute
+from todo_svc.cache import MemoryCache, CacheMiddleware
 
 
 class CreateTodoList(BaseModel):
@@ -51,6 +52,8 @@ def todo_list_role():
 def todo_svc() -> FastAPI:
     logging.config.dictConfig(LOG_CONFIG)
 
+    cache = MemoryCache()
+
     app = FastAPI()
     app.router.route_class = LoggingRoute
     app.add_middleware(
@@ -59,6 +62,7 @@ def todo_svc() -> FastAPI:
         commit_on_exit=True,
     )
     app.add_middleware(RequestHeadersMiddleware)
+    app.add_middleware(CacheMiddleware, cache=cache)
 
     @app.on_event("startup")
     async def run_migrations():
@@ -76,6 +80,8 @@ def todo_svc() -> FastAPI:
     async def get_todo_lists(response: responses.Response):
         user = current_headers().get("x-user")
         todo_lists = await TodoList.select(TodoList.collaborators.any(Collaborator.email == user))
+
+        response.headers["Vary"] = 'x-user'
 
         return todo_lists
 

@@ -52,12 +52,14 @@ class ListTodoList(BaseModel):
 def api_svc() -> FastAPI:
     logging.config.dictConfig(log_config.LOG_CONFIG)
 
+    cache = client.MemoryCache()
+
     app = FastAPI()
     app.router.route_class = route.LoggingRoute
     app.router.route_class.DELIMITER = True
 
     app.add_middleware(role.RoleMiddleware)
-    app.add_middleware(client.SessionMiddleware)
+    app.add_middleware(client.SessionMiddleware, cache=cache)
     app.add_middleware(context.CorrelationIdMiddleware)
     app.add_middleware(context.RequestHeadersMiddleware)
 
