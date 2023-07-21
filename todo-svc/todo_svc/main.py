@@ -80,7 +80,13 @@ def todo_svc() -> FastAPI:
     async def get_todo_lists(response: responses.Response, vary_on=Depends(cache.vary_on)):
         user = current_headers().get("x-user")
         todo_lists = await TodoList.select(TodoList.collaborators.any(Collaborator.email == user))
-        vary_on('x-user')
+        key = vary_on('x-user')
+
+        for todo_list in todo_lists:
+            TodoList.subscribe(dict(list_id=todo_list.list_id), lambda: cache.drop(key))
+        Collaborator.subscribe(dict(email=user), lambda: cache.drop(key))
+
+        response.headers["Vary"] = 'x-user'
 
         return todo_lists
 
@@ -99,8 +105,11 @@ def todo_svc() -> FastAPI:
         "/lists/{list_id}",
         dependencies=[todo_list_role()],
     )
-    async def get_todo_list(list_id: str):
+    async def get_todo_list(list_id: str, vary_on=Depends(cache.vary_on)):
         todo_list = await TodoList.get(TodoList.list_id == list_id)
+        key = vary_on()
+
+        TodoList.subscribe(dict(list_id=todo_list.list_id), lambda: cache.drop(key))
 
         return todo_list
 
