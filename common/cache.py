@@ -40,6 +40,13 @@ class MemoryCache:
         key = self._key(request, vary_headers)
         return self.cache.get(key)
 
+    def vary_on(self, request: Request, response: Response):
+        def _vary_on(*vary_headers):
+            response.headers["Vary"] = ';'.join(vary_headers)
+            return self._key(request, vary_headers)
+
+        return _vary_on
+
 
 @dataclass
 class CacheSend:

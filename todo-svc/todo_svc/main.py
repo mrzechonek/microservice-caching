@@ -77,11 +77,10 @@ def todo_svc() -> FastAPI:
             await connection.run_sync(upgrade, config)
 
     @app.get("/lists")
-    async def get_todo_lists(response: responses.Response):
+    async def get_todo_lists(response: responses.Response, vary_on=Depends(cache.vary_on)):
         user = current_headers().get("x-user")
         todo_lists = await TodoList.select(TodoList.collaborators.any(Collaborator.email == user))
-
-        response.headers["Vary"] = 'x-user'
+        vary_on('x-user')
 
         return todo_lists
 
